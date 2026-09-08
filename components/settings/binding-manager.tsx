@@ -63,7 +63,7 @@ import type { UserIdentity } from "@/components/settings/user-identity";
 import { loadCharacters } from "@/lib/character-storage";
 import type { Character } from "@/lib/character-types";
 
-type Level = "global" | "character" | "app";
+type Level = "global" | "global-app" | "character" | "app";
 type SingleBindingField = "apiConfigId" | "voiceConfigId" | "presetId" | "userIdentityId";
 type MultiBindingField = "worldBookIds" | "regexIds";
 type BindingField = SingleBindingField | MultiBindingField;
@@ -123,6 +123,8 @@ export function BindingManager() {
     const [activeSlotSheetField, setActiveSlotSheetField] = useState<BindingField | null>(null);
     const [activeAuxSheetField, setActiveAuxSheetField] = useState<AuxBindingField | null>(null);
     const [showCharacterPicker, setShowCharacterPicker] = useState(false);
+    const [showAppPicker, setShowAppPicker] = useState(false);
+    const [globalAppId, setGlobalAppId] = useState<string | null>(null);
     const [isLoaded, setIsLoaded] = useState(false);
 
     const reloadData = () => {
@@ -269,6 +271,13 @@ export function BindingManager() {
                 setLevel("character");
                 setSelectedAppId(null);
             });
+        } else if (level === "global-app") {
+            const appLabel = globalAppId ? getAppLabel(globalAppId) : "";
+            setSubpageTitle(`应用绑定 · ${appLabel}`);
+            setOverrideBack(() => () => {
+                setLevel("global");
+                setGlobalAppId(null);
+            });
         }
     }, [level, selectedCharId, selectedAppId, characters, customApps, setSubpageTitle, setOverrideBack]);
 
@@ -290,6 +299,11 @@ export function BindingManager() {
     };
 
     const updateAppSlot = (field: keyof BindingSlot, value: string | string[] | undefined) => {
+        if (level === "global-app" && globalAppId) {
+            const newAppDefaults = { ...config.appDefaults, [globalAppId]: { ...(config.appDefaults?.[globalAppId] || {}), [field]: value || undefined } };
+            persist({ ...config, appDefaults: newAppDefaults });
+            return;
+        }
         if (!selectedAppId) return;
         const binding = getCharacterBinding(config, selectedCharId);
         const appSlot = binding.appOverrides[selectedAppId] || {};
@@ -300,6 +314,12 @@ export function BindingManager() {
     };
 
     const resetAppBinding = () => {
+        if (level === "global-app" && globalAppId) {
+            const newAppDefaults = { ...config.appDefaults };
+            delete newAppDefaults[globalAppId];
+            persist({ ...config, appDefaults: newAppDefaults });
+            return;
+        }
         if (!selectedAppId) return;
         const binding = getCharacterBinding(config, selectedCharId);
         const newOverrides = { ...binding.appOverrides };
@@ -310,6 +330,7 @@ export function BindingManager() {
 
     const getCurrentSlot = (): BindingSlot => {
         if (level === "global") return config.globalDefaults;
+        if (level === "global-app" && globalAppId) return config.appDefaults?.[globalAppId] || {};
         const binding = getCharacterBinding(config, selectedCharId);
         if (level === "character") return binding.defaults;
         if (level === "app" && selectedAppId) return binding.appOverrides[selectedAppId] || {};
@@ -330,6 +351,7 @@ export function BindingManager() {
     const getInheritedSlot = (): BindingSlot => {
         if (level === "global") return {};
         const inherited = mergeSlotInto({}, config.globalDefaults);
+        if (level === "global-app") return inherited;
         const binding = getCharacterBinding(config, selectedCharId);
         if (level === "character") return inherited;
         mergeSlotInto(inherited, binding.defaults);
@@ -348,6 +370,7 @@ export function BindingManager() {
     const getInheritLabel = (): string => {
         if (level === "character") return "继承全局";
         if (level === "app") return "继承上级绑定";
+        if (level === "global-app") return "继承全局";
         return "";
     };
 
@@ -912,6 +935,57 @@ export function BindingManager() {
         );
     };
 
+    const openAppBinding = (appId: string) => {
+        setGlobalAppId(appId);
+        setActiveSlotSheetField(null);
+        setShowAppPicker(false);
+    };
+
+    const renderAppPickerDialog = () => {
+        if (!showAppPicker) return null;
+        return (
+            <div className="modal-overlay" data-ui="modal" onClick={() => setShowAppPicker(false)}>
+                <div
+                    className="modal-dialog"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label="为应用配置专属绑定"
+                    onClick={(event) => event.stopPropagation()}
+                >
+                    <span className="modal-header-title">为应用配置专属绑定</span>
+                    <div className="menu-desc">{appOverrideEntries.length === 0 ? "暂无应用，请先在桌面安装应用。" : "绑定后，该应用生成时将以此为默认（角色的单独覆盖仍优先）。"}</div>
+                    <div className="chat-contact-list">
+                        {appOverrideEntries.map(app => {
+                            const slot = config.appDefaults?.[app.id];
+                            const configured = Boolean(slot && (
+                                slot.apiConfigId || slot.presetId || slot.userIdentityId ||
+                                (slot.worldBookIds && slot.worldBookIds.length > 0)
+                            ));
+                            return (
+                                <button
+                                    key={app.id}
+                                    type="button"
+                                    className="chat-contact-item binding-contact-item"
+                                    onClick={() => openAppBinding(app.id)}
+                                >
+                                    <span className="chat-contact-avatar">
+                                        {app.iconDataUrl ? (
+                                            <img src={app.iconDataUrl} alt="" />
+                                        ) : (
+                                            <span className="chat-contact-avatar-fallback">{app.label.charAt(0)}</span>
+                                        )}
+                                    </span>
+                                    <span className="chat-contact-name">{app.label}</span>
+                                    {configured && <span className="binding-contact-badge" aria-label="已配置" />}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     const renderCharacterPickerDialog = () => {
         if (!showCharacterPicker) return null;
         return (
@@ -967,16 +1041,55 @@ export function BindingManager() {
                     <section className="flex flex-col gap-3">
                         <div className="flex items-center justify-between gap-3">
                             <p className="settings-menu-section-title min-w-0">Global Defaults</p>
-                            <button
-                                type="button"
-                                onClick={() => setShowCharacterPicker(true)}
-                                className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-[18px] bg-black px-3 text-[calc(11px*var(--app-text-scale,1))] font-bold text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow-md active:scale-95 focus:outline-none"
-                            >
-                                <UserPlus size={14} strokeWidth={1.8} />
-                                为角色配置专属绑定
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAppPicker(true)}
+                                    className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-[18px] border border-black/10 bg-white px-3 text-[calc(11px*var(--app-text-scale,1))] font-bold text-gray-800 shadow-sm transition-all hover:bg-gray-50 hover:shadow-md active:scale-95 focus:outline-none"
+                                >
+                                    <Box size={14} strokeWidth={1.8} />
+                                    为应用配置专属绑定
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowCharacterPicker(true)}
+                                    className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-[18px] bg-black px-3 text-[calc(11px*var(--app-text-scale,1))] font-bold text-white shadow-sm transition-all hover:bg-gray-800 hover:shadow-md active:scale-95 focus:outline-none"
+                                >
+                                    <UserPlus size={14} strokeWidth={1.8} />
+                                    为角色配置专属绑定
+                                </button>
+                            </div>
                         </div>
                         {renderGlobalSlotCards()}
+                    </section>
+
+                    <section className="flex flex-col gap-3">
+                        <p className="settings-menu-section-title">App Bindings（全局默认）</p>
+                        <div className="binding-app-grid">
+                            {appOverrideEntries.map(app => {
+                                const slot = config.appDefaults?.[app.id];
+                                const overrides = countOverrides(slot, app.id);
+                                return (
+                                    <button
+                                        key={app.id}
+                                        onClick={() => { setGlobalAppId(app.id); setActiveSlotSheetField(null); setLevel("global-app"); }}
+                                        className="g-card binding-app-card"
+                                        style={bindingAccentStyle(app.color)}
+                                        aria-label={`${app.label}应用绑定`}
+                                    >
+                                        <span className="binding-app-icon">
+                                            {app.iconDataUrl ? (
+                                                <img src={app.iconDataUrl} alt="" className="binding-app-icon-image" />
+                                            ) : (
+                                                <IconGlyph id={app.iconId} className="binding-app-icon-glyph" />
+                                            )}
+                                        </span>
+                                        <span className="binding-app-label">{app.label}</span>
+                                        {overrides > 0 && <span className="binding-app-badge">{overrides}</span>}
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </section>
 
                     <section className="flex flex-col gap-3">
@@ -995,6 +1108,25 @@ export function BindingManager() {
             {renderSlotPickerDialog()}
             {renderAuxPickerDialog()}
             {renderCharacterPickerDialog()}
+            {renderAppPickerDialog()}
+
+            {/* Level 1.5: App binding (global default) */}
+            {level === "global-app" && globalAppId && (
+                <>
+                    <section className="flex flex-col gap-3">
+                        <p className="settings-menu-section-title">App Binding · {getAppLabel(globalAppId)}</p>
+                        {renderBindingSlotCards(currentSlot, inheritLabel, setActiveSlotSheetField, {
+                            includeRegex: canBindRegexInApp(globalAppId),
+                        })}
+                    </section>
+                    <button
+                        onClick={resetAppBinding}
+                        className="ui-btn ui-btn-soft-danger flex justify-center"
+                    >
+                        <RotateCcw size={16} /> 重置此应用默认绑定
+                    </button>
+                </>
+            )}
 
             {/* Level 2: Character binding details */}
             {level === "character" && (

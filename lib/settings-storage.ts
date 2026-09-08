@@ -987,16 +987,18 @@ export function resolveBinding(
         if (slot.regexIds && slot.regexIds.length > 0) resolved.regexIds = [...slot.regexIds];
     };
 
+    // 应用级默认绑定（appDefaults）对所有角色共享；即使未指定角色也生效，
+    // 让用户可以在全局层就给某个应用单独绑定预设等配置。
+    if (appId && config.appDefaults?.[appId]) {
+        applySlot(config.appDefaults[appId]!);
+    }
+
     if (!characterId) return resolved;
 
     // Apply character defaults
     const charBinding = config.characterBindings.find(b => b.characterId === characterId);
     if (charBinding) {
         applySlot(charBinding.defaults);
-    }
-
-    if (appId && config.appDefaults?.[appId]) {
-        applySlot(config.appDefaults[appId]!);
     }
 
     if (appId && charBinding?.appOverrides[appId]) {
